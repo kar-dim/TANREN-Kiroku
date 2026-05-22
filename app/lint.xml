@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- tanren.png and kiroku.png are content images displayed at a fixed size
+         via Compose, not icons. Density variants are not needed. -->
+    <issue id="IconLocation">
+        <ignore path="res/drawable/tanren.png" />
+        <ignore path="res/drawable/kiroku.png" />
+    </issue>
+    <issue id="IconMissingDensityFolder">
+        <ignore path="res/drawable/tanren.png" />
+        <ignore path="res/drawable/kiroku.png" />
+    </issue>
+</lint>
