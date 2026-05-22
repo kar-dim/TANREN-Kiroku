@@ -1,4 +1,4 @@
-# TANREN Kiroku, 鍛錬 記録
+# TANREN Kiroku
 
 **TANREN** (鍛錬) is a Japanese concept meaning the forging and tempering of metal, the repeated, deliberate process that turns raw material into something refined. Applied to training, it describes what happens when you show up consistently, lift with awareness, and build on what came before. Not motivation. Not inspiration. Work, recorded and repeated.
 
