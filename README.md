@@ -24,19 +24,19 @@ TANREN Kiroku is an Android workout logger. No accounts, no cloud, no subscripti
 ## Screenshots
 
 <p align="center">
-  <img src="readme_screenshots/pic1.png" width="300"/>
-  <img src="readme_screenshots/pic2.png" width="300"/>
-  <img src="readme_screenshots/pic3.png" width="300"/>
+  <img src="readme_screenshots/pic1.png" width="280"/>
+  <img src="readme_screenshots/pic2.png" width="280"/>
+  <img src="readme_screenshots/pic3.png" width="280"/>
   </p>
 <p align="center">
-  <img src="readme_screenshots/pic4.png" width="300"/>
-  <img src="readme_screenshots/pic5.png" width="300"/>
-  <img src="readme_screenshots/pic6.png" width="300"/>
+  <img src="readme_screenshots/pic4.png" width="280"/>
+  <img src="readme_screenshots/pic5.png" width="280"/>
+  <img src="readme_screenshots/pic6.png" width="280"/>
 </p>
 <p align="center">
-  <img src="readme_screenshots/pic7.png" width="300"/>
-  <img src="readme_screenshots/pic8.png" width="300"/>
-  <img src="readme_screenshots/pic9.png" width="300"/>
+  <img src="readme_screenshots/pic7.png" width="280"/>
+  <img src="readme_screenshots/pic8.png" width="280"/>
+  <img src="readme_screenshots/pic9.png" width="280"/>
 </p>
 
 ## Companion app
