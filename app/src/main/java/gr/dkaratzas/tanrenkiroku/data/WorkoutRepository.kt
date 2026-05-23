@@ -12,15 +12,18 @@ internal val WORKOUT_FILE_REGEX = Regex("\\d{4}-\\d{2}-\\d{2}\\.json")
 internal const val CUSTOM_EXERCISES_FILENAME = "custom_exercises.json"
 private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
 
+// A file that participates in sync/backup: a dated workout file or the custom exercises file
+internal fun isSyncableFile(name: String): Boolean = name.matches(WORKOUT_FILE_REGEX) || name == CUSTOM_EXERCISES_FILENAME
+
 // Class responsible for loading and saving workout from/into disk
 class WorkoutRepository(private val context: Context) {
 
     val workoutsDir: File
         get() = context.getExternalFilesDir(null) ?: context.filesDir
 
-    val customExercisesFile: File get() = File(workoutsDir, CUSTOM_EXERCISES_FILENAME)
-
     fun workoutFiles(): Array<File> = workoutsDir.listFiles { f -> f.name.matches(WORKOUT_FILE_REGEX) } ?: emptyArray()
+
+    fun syncableFiles(): List<File> = workoutsDir.listFiles { f -> isSyncableFile(f.name) }?.toList() ?: emptyList()
 
     fun deleteAllWorkoutFiles() = workoutFiles().forEach { it.delete() }
 

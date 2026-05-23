@@ -113,8 +113,10 @@ fun ExercisePickerScreen(viewModel: WorkoutViewModel, onBack: () -> Unit) {
     if (showCreateDialog) {
         CreateCustomExerciseDialog(
             onConfirm = { name, group, primary, secondary ->
-                viewModel.addCustomExercise(name, group, primary, secondary)
-                showCreateDialog = false
+                val added = viewModel.addCustomExercise(name, group, primary, secondary)
+                if (added)
+                    showCreateDialog = false
+                added
             },
             onDismiss = { showCreateDialog = false }
         )
@@ -211,7 +213,7 @@ private fun ExerciseList(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateCustomExerciseDialog(
-    onConfirm: (name: String, group: String, primary: List<String>, secondary: List<String>) -> Unit,
+    onConfirm: (name: String, group: String, primary: List<String>, secondary: List<String>) -> Boolean,
     onDismiss: () -> Unit
 ) {
     val groups = EXERCISE_CATALOG.map { it.name }
@@ -220,6 +222,7 @@ private fun CreateCustomExerciseDialog(
     var primaryMuscles by remember { mutableStateOf(emptySet<String>()) }
     var secondaryMuscles by remember { mutableStateOf(emptySet<String>()) }
     var nameError by remember { mutableStateOf(false) }
+    var duplicateError by remember { mutableStateOf(false) }
     // we use several checks here for not allowing a secondary exercise to be primary (and vice versa), plus the "category"
     //muscle IS automatically primary (can't be secondary)
     AlertDialog(
@@ -232,10 +235,13 @@ private fun CreateCustomExerciseDialog(
             ) {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it; nameError = false },
+                    onValueChange = { name = it; nameError = false; duplicateError = false },
                     label = { Text("Exercise name") },
                     isError = nameError,
                     singleLine = true,
+                    supportingText = if (duplicateError) {
+                        { Text("An exercise with this name already exists") }
+                    } else null,
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -282,9 +288,16 @@ private fun CreateCustomExerciseDialog(
         },
         confirmButton = {
             Button(onClick = {
-                if (name.isBlank()) { nameError = true; return@Button }
+                if (name.isBlank()) {
+                    nameError = true
+                    return@Button
+                }
                 val effectivePrimary = primaryMuscles.ifEmpty { setOf(selectedGroup) }
-                onConfirm(name.trim(), selectedGroup, effectivePrimary.toList(), secondaryMuscles.toList())
+                val added = onConfirm(name.trim(), selectedGroup, effectivePrimary.toList(), secondaryMuscles.toList())
+                if (!added) {
+                    nameError = true
+                    duplicateError = true
+                }
             }) { Text("Create") }
         },
         dismissButton = {

@@ -39,7 +39,7 @@ import gr.dkaratzas.tanrenkiroku.R
 fun InfoScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1-dev"
     }
 
     Scaffold(

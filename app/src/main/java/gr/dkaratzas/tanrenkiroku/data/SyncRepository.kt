@@ -37,9 +37,7 @@ class SyncRepository(private val workoutsDir: File, payload: QrPayload) {
     }
 
     suspend fun sendManifest(): ManifestResponse = withContext(Dispatchers.IO) {
-        val files = workoutsDir.listFiles { f ->
-            f.name.matches(WORKOUT_FILE_REGEX) || f.name == CUSTOM_EXERCISES_FILENAME
-        } ?: emptyArray()
+        val files = workoutsDir.listFiles { f -> isSyncableFile(f.name) } ?: emptyArray()
 
         val entries = files.map { file ->
             val normalized = json.encodeToString(json.parseToJsonElement(file.readText())).toByteArray()

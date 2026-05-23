@@ -16,6 +16,7 @@ import java.io.File
 // Main View Model for syncing to desktop purposes
 
 private const val TAG = "TanrenSync"
+private val json = Json { ignoreUnknownKeys = true }
 
 sealed class SyncState {
     object Scanning : SyncState()
@@ -41,7 +42,7 @@ class SyncViewModel(application: Application) : AndroidViewModel(application) {
         qrHandled = true
 
         val payload = try {
-            Json.decodeFromString<QrPayload>(raw)
+            json.decodeFromString<QrPayload>(raw)
         } catch (e: Exception) {
             Log.e(TAG, "QR parse failed: $raw", e)
             state = SyncState.Failed("Invalid QR code: ${e.message}")

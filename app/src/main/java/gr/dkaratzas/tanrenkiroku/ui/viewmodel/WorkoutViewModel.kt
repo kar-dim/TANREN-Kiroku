@@ -6,11 +6,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import gr.dkaratzas.tanrenkiroku.data.CUSTOM_EXERCISES_FILENAME
+import gr.dkaratzas.tanrenkiroku.data.isSyncableFile
 import gr.dkaratzas.tanrenkiroku.data.EXERCISE_CATALOG
 import gr.dkaratzas.tanrenkiroku.data.MuscleGroup
 import gr.dkaratzas.tanrenkiroku.data.Exercise
-import gr.dkaratzas.tanrenkiroku.data.WORKOUT_FILE_REGEX
 import gr.dkaratzas.tanrenkiroku.data.PreferencesManager
 import gr.dkaratzas.tanrenkiroku.data.ThemeMode
 import gr.dkaratzas.tanrenkiroku.data.UnitSystem
@@ -221,7 +220,11 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         if (trimmed.isBlank())
             return false
         val id = "custom_" + trimmed.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
-        if (customExercises.any { it.id == id } || EXERCISE_CATALOG.any { g -> g.exercises.any { it.id == id } }) return false
+        val nameTaken =
+            customExercises.any { it.name.equals(trimmed, ignoreCase = true) || it.id == id } ||
+            EXERCISE_CATALOG.any { g -> g.exercises.any { it.name.equals(trimmed, ignoreCase = true) } }
+        if (nameTaken)
+            return false
         val updated = customExercises + CustomExercise(
             id = id,
             name = trimmed,
@@ -259,8 +262,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 ZipInputStream(input.buffered()).use { zis ->
                     var entry = zis.nextEntry
                     while (entry != null) {
-                        if (!entry.isDirectory &&
-                            (entry.name.matches(WORKOUT_FILE_REGEX) || entry.name == CUSTOM_EXERCISES_FILENAME)) {
+                        if (!entry.isDirectory && isSyncableFile(entry.name)) {
                             repo.writeWorkoutFile(entry.name, zis.readBytes())
                         }
                         zis.closeEntry()
@@ -274,9 +276,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     suspend fun exportBackupToUri(uri: Uri) = withContext(Dispatchers.IO) {
-        val files = (repo.workoutFiles().toList() + listOfNotNull(
-            repo.customExercisesFile.takeIf { it.exists() }
-        )).sortedBy { it.name }
+        val files = repo.syncableFiles().sortedBy { it.name }
         getApplication<Application>().contentResolver.openOutputStream(uri)?.buffered()?.use { out ->
             ZipOutputStream(out).use { zos ->
                 files.forEach { file ->
