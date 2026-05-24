@@ -45,6 +45,10 @@ TANREN Kiroku is an Android workout logger. No accounts, no cloud, no subscripti
 
 Sync is done locally over your network: scan the QR code shown by Metsuke and the transfer happens directly between your phone and desktop/laptop.
 
+## Installation
+
+To install the app, download the APK from the [Releases](https://github.com/kar-dim/TANREN-Kiroku/releases) page, allow "Install unknown apps" on your Android device and select the downloaded APK.
+
 ## Data
 
 All data is stored locally on your device as plain files. No cloud, no account required. You own your data and can back it up, transfer it, or inspect it at any time.
