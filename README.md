@@ -1,5 +1,7 @@
 # TANREN Kiroku
 
+![Status](https://img.shields.io/badge/status-alpha-orange)
+
 **TANREN** (鍛錬) is a Japanese concept meaning the forging and tempering of metal, the repeated, deliberate process that turns raw material into something refined. Applied to training, it describes what happens when you show up consistently, lift with awareness, and build on what came before. Not motivation. Not inspiration. Work, recorded and repeated.
 
 **Kiroku** (記録) means record, or documentation. This app is the record of your own reforging process.
