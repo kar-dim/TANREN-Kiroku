@@ -47,6 +47,37 @@ TANREN Kiroku is an Android workout logger. No accounts, no cloud, no subscripti
 
 Sync is done locally over your network: scan the QR code shown by Metsuke and the transfer happens directly between your phone and desktop/laptop.
 
+## Desktop–Mobile Sync Protocol Specification
+
+Synchronization occurs strictly over the local network (Wi-Fi):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Desktop as TANREN-Metsuke (PC)
+    participant Mobile as TANREN-Kiroku (Phone)
+
+    User->>Desktop: Open Sync Tab
+    Desktop->>Desktop: Generate ephemeral RSA-2048 X509Cert
+    Desktop->>Desktop: Bind TcpListener to dynamic port
+    Desktop->>Desktop: Render QR code on screen
+    User->>Mobile: Open Sync Screen & Scan QR
+    Mobile->>Desktop: GET /ping (TLS Pinned, Authorization: Bearer <token>)
+    Desktop-->>Mobile: 200 OK {"ok": true}
+    Mobile->>Desktop: POST /sync/manifest (Phone's file list + SHA256 hashes)
+    Desktop->>Desktop: Compare hashes with local files
+    Desktop->>Desktop: Delete local files absent on phone
+    Desktop-->>Mobile: 200 OK {"needed": ["2026-09-26.json"], "deleted": 0}
+    loop For each file in needed
+        Mobile->>Desktop: POST /sync/upload {"filename": "...", "content": {...}}
+        Desktop->>Desktop: Save file to disk
+        Desktop-->>Mobile: 200 OK {"ok": true}
+    end
+    Desktop->>Desktop: Batch trigger UI reload (onSyncCompleted)
+    Mobile-->>User: "Sync Complete!"
+```
+
 ## Installation
 
 To install the app, download the APK from the [Releases](https://github.com/kar-dim/TANREN-Kiroku/releases) page, allow "Install unknown apps" on your Android device and select the downloaded APK.
