@@ -39,13 +39,15 @@ class SyncRepository(private val workoutsDir: File, payload: QrPayload) {
     suspend fun sendManifest(): ManifestResponse = withContext(Dispatchers.IO) {
         val files = workoutsDir.listFiles { f -> isSyncableFile(f.name) } ?: emptyArray()
 
-        val entries = files.map { file ->
-            val normalized = json.encodeToString(json.parseToJsonElement(file.readText())).toByteArray()
-            FileManifestEntry(
-                filename = file.name,
-                modified = file.lastModified() / 1000,
-                hash = sha256Hex(normalized)
-            )
+        val entries = files.mapNotNull { file ->
+            runCatching {
+                val normalized = json.encodeToString(json.parseToJsonElement(file.readText())).toByteArray()
+                FileManifestEntry(
+                    filename = file.name,
+                    modified = file.lastModified() / 1000,
+                    hash = sha256Hex(normalized)
+                )
+            }.getOrNull()
         }
 
         val body = encodeBody(entries)

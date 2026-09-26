@@ -1,34 +1,36 @@
 package gr.dkaratzas.tanrenkiroku.ui.viewmodel
 
 import android.app.Application
+import android.net.Uri
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import gr.dkaratzas.tanrenkiroku.data.isSyncableFile
 import gr.dkaratzas.tanrenkiroku.data.EXERCISE_CATALOG
-import gr.dkaratzas.tanrenkiroku.data.MuscleGroup
 import gr.dkaratzas.tanrenkiroku.data.Exercise
+import gr.dkaratzas.tanrenkiroku.data.MuscleGroup
 import gr.dkaratzas.tanrenkiroku.data.PreferencesManager
 import gr.dkaratzas.tanrenkiroku.data.ThemeMode
 import gr.dkaratzas.tanrenkiroku.data.UnitSystem
 import gr.dkaratzas.tanrenkiroku.data.WorkoutRepository
 import gr.dkaratzas.tanrenkiroku.data.exerciseDisplayName
+import gr.dkaratzas.tanrenkiroku.data.isSyncableFile
 import gr.dkaratzas.tanrenkiroku.data.model.CustomExercise
 import gr.dkaratzas.tanrenkiroku.data.model.WorkoutDay
 import gr.dkaratzas.tanrenkiroku.data.model.WorkoutEntry
 import gr.dkaratzas.tanrenkiroku.data.model.WorkoutSet
-import androidx.compose.runtime.derivedStateOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.net.Uri
+import java.io.File
+import java.io.IOException
 import java.time.LocalDate
-import kotlin.math.roundToLong
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import kotlin.math.roundToLong
 
 // ViewModel for workout operations
 class WorkoutViewModel(application: Application) : AndroidViewModel(application) {
@@ -80,7 +82,11 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     fun toDisplayWeight(kg: Double, withUnit: Boolean = true): String {
         val value = round2(if (_unitSystem == UnitSystem.LB) kg * LB_PER_KG else kg)
-        val num = if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()
+        val num = if (kotlin.math.abs(value - kotlin.math.round(value)) < 0.001) {
+            kotlin.math.round(value).toLong().toString()
+        } else {
+            "%.2f".format(java.util.Locale.US, value).trimEnd('0').trimEnd('.')
+        }
         return if (withUnit) "$num $weightUnit" else num
     }
 
@@ -198,8 +204,24 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    suspend fun lastSetForExercise(exerciseId: String): WorkoutSet? =
-        withContext(Dispatchers.IO) { repo.lastSetForExercise(exerciseId, selectedDate) }
+    fun lastSetForExercise(exerciseId: String): WorkoutSet? =
+        allWorkouts
+            .filter { runCatching { LocalDate.parse(it.date) < selectedDate }.getOrDefault(false) }
+            .firstNotNullOfOrNull { day ->
+                day.entries.find { it.exerciseId == exerciseId }?.sets?.lastOrNull()
+            }
+
+    fun cleanEmptyExercises() {
+        val current = workout ?: return
+        val cleaned = current.entries.filter { it.sets.isNotEmpty() }
+        if (cleaned.size != current.entries.size) {
+            if (cleaned.isEmpty()) {
+                deleteCurrentWorkout()
+            } else {
+                persist(current.copy(entries = cleaned))
+            }
+        }
+    }
 
     fun deleteAllWorkouts() {
         workoutDates = emptySet()
@@ -219,9 +241,16 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         val trimmed = name.trim()
         if (trimmed.isBlank())
             return false
-        val id = "custom_" + trimmed.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+        val slug = trimmed.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+        val baseId = if (slug.isNotBlank()) "custom_$slug" else "custom_${System.currentTimeMillis()}"
+        var id = baseId
+        var counter = 1
+        while (customExercises.any { it.id == id } || EXERCISE_CATALOG.any { g -> g.exercises.any { it.id == id } }) {
+            id = "${baseId}_$counter"
+            counter++
+        }
         val nameTaken =
-            customExercises.any { it.name.equals(trimmed, ignoreCase = true) || it.id == id } ||
+            customExercises.any { it.name.equals(trimmed, ignoreCase = true) } ||
             EXERCISE_CATALOG.any { g -> g.exercises.any { it.name.equals(trimmed, ignoreCase = true) } }
         if (nameTaken)
             return false
@@ -257,18 +286,47 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun importBackup(uri: Uri) {
         withContext(Dispatchers.IO) {
-            repo.deleteAllWorkoutFiles()
-            getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
-                ZipInputStream(input.buffered()).use { zis ->
-                    var entry = zis.nextEntry
-                    while (entry != null) {
-                        if (!entry.isDirectory && isSyncableFile(entry.name)) {
-                            repo.writeWorkoutFile(entry.name, zis.readBytes())
+            val context = getApplication<Application>()
+            val tempDir = File(context.cacheDir, "backup_restore_${System.currentTimeMillis()}")
+            if (!tempDir.mkdirs()) {
+                throw IOException("Failed to create temporary restore directory")
+            }
+            try {
+                val extractedCount = run {
+                    val input = context.contentResolver.openInputStream(uri)
+                        ?: throw IOException("Cannot open backup file")
+                    var count = 0
+                    input.use { rawInput ->
+                        ZipInputStream(rawInput.buffered()).use { zis ->
+                            var entry = zis.nextEntry
+                            while (entry != null) {
+                                val safeName = File(entry.name).name
+                                if (!entry.isDirectory && isSyncableFile(safeName)) {
+                                    File(tempDir, safeName).writeBytes(zis.readBytes())
+                                    count++
+                                }
+                                zis.closeEntry()
+                                entry = zis.nextEntry
+                            }
                         }
-                        zis.closeEntry()
-                        entry = zis.nextEntry
                     }
+                    count
                 }
+
+                if (extractedCount == 0) {
+                    throw IOException("No valid workout or custom exercise files found in backup")
+                }
+
+                // Delete existing syncable files only after backup extraction succeeds
+                repo.syncableFiles().forEach { it.delete() }
+
+                // Move extracted files into workouts directory
+                repo.workoutsDir.mkdirs()
+                tempDir.listFiles()?.forEach { file ->
+                    file.copyTo(File(repo.workoutsDir, file.name), overwrite = true)
+                }
+            } finally {
+                tempDir.deleteRecursively()
             }
         }
         reloadAll()

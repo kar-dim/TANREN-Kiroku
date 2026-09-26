@@ -41,13 +41,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -93,7 +92,12 @@ fun HomeScreen(
     var setDialog by remember { mutableStateOf<SetDialogState?>(null) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showCopyPicker by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.cleanEmptyExercises()
+        }
+    }
 
     LaunchedEffect(viewModel.pendingNewExerciseId) {
         val exerciseId = viewModel.pendingNewExerciseId ?: return@LaunchedEffect
@@ -156,7 +160,7 @@ fun HomeScreen(
                 ) {
                     itemsIndexed(
                         items = workout.entries,
-                        key = { _, entry -> entry.exerciseId }
+                        key = { index, entry -> "${entry.exerciseId}_$index" }
                     ) { _, entry ->
                         ExerciseCard(
                             entry = entry,
@@ -167,10 +171,8 @@ fun HomeScreen(
                                 if (todayLast != null) {
                                     setDialog = newSetDialog(entry.exerciseId, todayLast) { viewModel.toDisplayWeight(it, withUnit = false) }
                                 } else {
-                                    scope.launch {
-                                        val prev = viewModel.lastSetForExercise(entry.exerciseId)
-                                        setDialog = newSetDialog(entry.exerciseId, prev) { viewModel.toDisplayWeight(it, withUnit = false) }
-                                    }
+                                    val prev = viewModel.lastSetForExercise(entry.exerciseId)
+                                    setDialog = newSetDialog(entry.exerciseId, prev) { viewModel.toDisplayWeight(it, withUnit = false) }
                                 }
                             },
                             onEditSet = { idx, set ->
@@ -234,7 +236,10 @@ fun HomeScreen(
             onDelete = if (state.setIndex != null) {
                 { viewModel.deleteSet(state.exerciseId, state.setIndex); setDialog = null }
             } else null,
-            onDismiss = { setDialog = null }
+            onDismiss = {
+                viewModel.cleanEmptyExercises()
+                setDialog = null
+            }
         )
     }
 }
@@ -435,7 +440,7 @@ private fun SetDialog(
                 TextButton(onClick = onDismiss) { Text("Cancel") }
                 Button(onClick = {
                     val reps = repsText.trim().toIntOrNull()?.takeIf { it > 0 }
-                    val kg = kgText.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it > 0 }
+                    val kg = kgText.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it >= 0 }
                     repsError = reps == null
                     kgError = kg == null
                     if (reps != null && kg != null) onConfirm(reps, kg)

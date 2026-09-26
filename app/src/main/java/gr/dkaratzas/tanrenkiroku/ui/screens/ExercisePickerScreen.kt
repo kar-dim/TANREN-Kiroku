@@ -292,8 +292,8 @@ private fun CreateCustomExerciseDialog(
                     nameError = true
                     return@Button
                 }
-                val effectivePrimary = primaryMuscles.ifEmpty { setOf(selectedGroup) }
-                val added = onConfirm(name.trim(), selectedGroup, effectivePrimary.toList(), secondaryMuscles.toList())
+                val effectivePrimary = (setOf(selectedGroup) + primaryMuscles).toList()
+                val added = onConfirm(name.trim(), selectedGroup, effectivePrimary, secondaryMuscles.toList())
                 if (!added) {
                     nameError = true
                     duplicateError = true

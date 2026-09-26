@@ -19,9 +19,8 @@ import gr.dkaratzas.tanrenkiroku.ui.viewmodel.WorkoutViewModel
 private const val FADE_DURATION = 350
 
 @Composable
-fun NavGraph() {
+fun NavGraph(viewModel: WorkoutViewModel = viewModel()) {
     val navController = rememberNavController()
-    val viewModel: WorkoutViewModel = viewModel()
 
     NavHost(
         navController = navController,
