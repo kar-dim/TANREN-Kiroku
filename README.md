@@ -12,7 +12,7 @@
 
 ## What it does
 
-TANREN Kiroku is an Android workout logger. No accounts, no cloud, no subscriptions.
+TANREN Kiroku is a simple Android workout logger. No account is required.
 
 - **Log workouts by day:** Navigate through dates, add exercises, and track sets with reps and weight
 - **Built-in exercise catalog:** Organized by muscle group, covering the major compound and isolation movements
@@ -47,6 +47,8 @@ TANREN Kiroku is an Android workout logger. No accounts, no cloud, no subscripti
 
 Sync is done locally over your network: scan the QR code shown by Metsuke and the transfer happens directly between your phone and desktop/laptop.
 
+Both apps must support sync protocol v2. The QR code advertises `protocolVersion: 2`, and Kiroku verifies it again at `/ping`. Sync waits for queued edits, uploads an immutable snapshot, and reports success only after the desktop acknowledges `/sync/complete`. Dropped requests retry with the same session and content.
+
 ## Desktop–Mobile Sync Protocol Specification
 
 Synchronization occurs strictly over the local network (Wi-Fi):
@@ -59,22 +61,26 @@ sequenceDiagram
     participant Mobile as TANREN-Kiroku (Phone)
 
     User->>Desktop: Open Sync Tab
-    Desktop->>Desktop: Generate ephemeral RSA-2048 X509Cert
+    Desktop->>Desktop: Load or create persistent RSA-2048 X509Cert
     Desktop->>Desktop: Bind TcpListener to dynamic port
     Desktop->>Desktop: Render QR code on screen
     User->>Mobile: Open Sync Screen & Scan QR
     Mobile->>Desktop: GET /ping (TLS Pinned, Authorization: Bearer <token>)
-    Desktop-->>Mobile: 200 OK {"ok": true}
-    Mobile->>Desktop: POST /sync/manifest (Phone's file list + SHA256 hashes)
+    Desktop-->>Mobile: 200 OK {"ok": true, "protocolVersion": 2}
+    Mobile->>Mobile: Capture complete validated file snapshot
+    Mobile->>Desktop: POST /sync/manifest {protocolVersion: 2, complete: true, files: [...]}
     Desktop->>Desktop: Compare hashes with local files
-    Desktop->>Desktop: Delete local files absent on phone
-    Desktop-->>Mobile: 200 OK {"needed": ["2026-09-26.json"], "deleted": 0}
+    Desktop->>Desktop: Plan removals: keep current files unchanged
+    Desktop-->>Mobile: 200 OK {"sessionId": "...", "needed": ["2026-09-26.json"], "deleted": 0}
     loop For each file in needed
-        Mobile->>Desktop: POST /sync/upload {"filename": "...", "content": {...}}
-        Desktop->>Desktop: Save file to disk
+        Mobile->>Desktop: POST /sync/upload {"sessionId": "...", "filename": "...", "content": {...}}
+        Desktop->>Desktop: Validate hash and JSON: stage file
         Desktop-->>Mobile: 200 OK {"ok": true}
     end
-    Desktop->>Desktop: Batch trigger UI reload (onSyncCompleted)
+    Mobile->>Desktop: POST /sync/complete {"sessionId": "..."}
+    Desktop->>Desktop: Commit snapshot: archive previous dataset
+    Desktop->>Desktop: Reload UI once if data changed
+    Desktop-->>Mobile: 200 OK {"ok": true}
     Mobile-->>User: "Sync Complete!"
 ```
 
@@ -85,3 +91,7 @@ To install the app, download the APK from the [Releases](https://github.com/kar-
 ## Data
 
 All data is stored locally on your device as plain files. No cloud, no account required. You own your data and can back it up, transfer it, or inspect it at any time.
+
+Backup imports validate every participating file before replacement and enforce limits of 10,000 ZIP entries, 8 MiB per entry, and 128 MiB of uncompressed data. Replacements are staged, with original files retained on disk until commit. Interrupted replacements are recovered before subsequent reads or sync. Storage failures appear with a Retry action and block sync or export until resolved.
+
+Weights are stored in kg. Zero means no recorded added load and remains valid. Metsuke includes zero-load sets in rep records, history and set-distribution charts; their recorded load volume stays zero.

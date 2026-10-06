@@ -29,6 +29,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -89,9 +90,9 @@ fun HomeScreen(
     onSettings: () -> Unit,
     onInfo: () -> Unit
 ) {
-    var setDialog by remember { mutableStateOf<SetDialogState?>(null) }
+    var setDialog by remember(viewModel.selectedDate) { mutableStateOf<SetDialogState?>(null) }
     var showDatePicker by remember { mutableStateOf(false) }
-    var showCopyPicker by remember { mutableStateOf(false) }
+    var showCopyPicker by remember(viewModel.selectedDate) { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -124,8 +125,10 @@ fun HomeScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onAddExercise) {
-                Icon(Icons.Default.Add, contentDescription = "Add Exercise")
+            if (viewModel.canEditWorkout) {
+                FloatingActionButton(onClick = onAddExercise) {
+                    Icon(Icons.Default.Add, contentDescription = "Add Exercise")
+                }
             }
         }
     ) { padding ->
@@ -147,7 +150,11 @@ fun HomeScreen(
             HorizontalDivider()
 
             val workout = viewModel.workout
-            if (workout == null || workout.entries.isEmpty()) {
+            if (viewModel.isWorkoutLoading) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            } else if (!viewModel.canEditWorkout) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Workout could not be loaded.") }
+            } else if (workout == null || workout.entries.isEmpty()) {
                 EmptyWorkoutPlaceholder(
                     onCopyWorkout = if (viewModel.allWorkouts.isNotEmpty()) {
                         { showCopyPicker = true }
@@ -440,7 +447,7 @@ private fun SetDialog(
                 TextButton(onClick = onDismiss) { Text("Cancel") }
                 Button(onClick = {
                     val reps = repsText.trim().toIntOrNull()?.takeIf { it > 0 }
-                    val kg = kgText.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it >= 0 }
+                    val kg = kgText.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 }
                     repsError = reps == null
                     kgError = kg == null
                     if (reps != null && kg != null) onConfirm(reps, kg)

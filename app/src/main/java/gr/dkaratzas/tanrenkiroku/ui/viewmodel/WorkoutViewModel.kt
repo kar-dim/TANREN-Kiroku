@@ -16,20 +16,25 @@ import gr.dkaratzas.tanrenkiroku.data.ThemeMode
 import gr.dkaratzas.tanrenkiroku.data.UnitSystem
 import gr.dkaratzas.tanrenkiroku.data.WorkoutRepository
 import gr.dkaratzas.tanrenkiroku.data.exerciseDisplayName
-import gr.dkaratzas.tanrenkiroku.data.isSyncableFile
+import gr.dkaratzas.tanrenkiroku.data.WorkoutDateGuard
+import gr.dkaratzas.tanrenkiroku.data.extractWorkoutBackup
+import gr.dkaratzas.tanrenkiroku.data.exportWorkoutBackup
 import gr.dkaratzas.tanrenkiroku.data.model.CustomExercise
 import gr.dkaratzas.tanrenkiroku.data.model.WorkoutDay
 import gr.dkaratzas.tanrenkiroku.data.model.WorkoutEntry
 import gr.dkaratzas.tanrenkiroku.data.model.WorkoutSet
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 import java.time.LocalDate
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
 import kotlin.math.roundToLong
 
 // ViewModel for workout operations
@@ -45,6 +50,41 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     var workout: WorkoutDay? by mutableStateOf(null)
         private set
+
+    var isWorkoutLoading by mutableStateOf(true)
+        private set
+    private var workoutLoadSucceeded by mutableStateOf(false)
+    val canEditWorkout: Boolean get() = !isWorkoutLoading && workoutLoadSucceeded
+    var storageError by mutableStateOf<String?>(null)
+        private set
+    private val dateGuard = WorkoutDateGuard(selectedDate)
+    private var loadJob: Job? = null
+    private var dataRevision = 0L
+    var pendingNewExerciseId by mutableStateOf<String?>(null)
+        private set
+
+    fun dismissStorageError() { storageError = null }
+
+    fun retryStorage() {
+        viewModelScope.launch {
+            try {
+                repo.retryFailedWrites()
+                storageError = null
+                reloadAll()
+                loadWorkout()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { storageError = "Could not save or load workout data: ${e.message}" }
+        }
+    }
+
+    private fun watchMutation(task: Deferred<Unit>) {
+        dataRevision++
+        viewModelScope.launch {
+            try { task.await(); reloadAll() }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { storageError = "Could not save workout data: ${e.message}. Retry saving before syncing or backing up." }
+        }
+    }
 
     private var _themeMode by mutableStateOf(prefs.themeMode)
     val themeMode: ThemeMode get() = _themeMode
@@ -104,14 +144,18 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     init {
-        viewModelScope.launch { reloadAll() }
+        viewModelScope.launch {
+            try { reloadAll() }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { storageError = "Could not load workout data: ${e.message}" }
+        }
         loadWorkout()
     }
 
     private suspend fun reloadAll() {
-        val (dates, workouts, custom) = withContext(Dispatchers.IO) {
-            Triple(repo.loadWorkoutDates(), repo.loadAllWorkouts(), repo.loadCustomExercises())
-        }
+        val revision = dataRevision
+        val (dates, workouts, custom) = repo.loadAllData()
+        if (revision != dataRevision) return
         workoutDates = dates
         allWorkouts = workouts
         customExercises = custom
@@ -146,17 +190,34 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun loadWorkout() {
-        viewModelScope.launch {
-            workout = withContext(Dispatchers.IO) { repo.loadWorkout(selectedDate) }
+        loadJob?.cancel()
+        val ticket = dateGuard.begin(selectedDate)
+        workout = null
+        pendingNewExerciseId = null
+        workoutLoadSucceeded = false
+        isWorkoutLoading = true
+        loadJob = viewModelScope.launch {
+            try {
+                val loaded = repo.loadWorkout(ticket.date)
+                if (dateGuard.accepts(ticket)) {
+                    workout = loaded
+                    workoutLoadSucceeded = true
+                    isWorkoutLoading = false
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (dateGuard.accepts(ticket)) {
+                    isWorkoutLoading = false
+                    storageError = "Could not load ${ticket.date}: ${e.message}"
+                }
+            }
         }
     }
-
-    var pendingNewExerciseId by mutableStateOf<String?>(null)
-        private set
 
     fun clearPendingNewExercise() { pendingNewExerciseId = null }
 
     fun addExercise(exerciseId: String) {
+        if (!canEditWorkout) return
         val current = workout ?: WorkoutDay(selectedDate.toString())
         if (current.entries.any { it.exerciseId == exerciseId })
             return
@@ -165,13 +226,16 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun addSet(exerciseId: String, reps: Int, kg: Double) {
+        if (!canEditWorkout || !validSet(reps, kg)) return
         val current = workout ?: return
         persist(current.mapEntry(exerciseId) { it.copy(sets = it.sets + WorkoutSet(reps, kg)) })
     }
 
     fun updateSet(exerciseId: String, setIndex: Int, reps: Int, kg: Double) {
+        if (!canEditWorkout || !validSet(reps, kg)) return
         val current = workout ?: return
         persist(current.mapEntry(exerciseId) { entry ->
+            if (setIndex !in entry.sets.indices) return@mapEntry entry
             val sets = entry.sets.toMutableList()
             sets[setIndex] = WorkoutSet(reps, kg)
             entry.copy(sets = sets)
@@ -179,10 +243,12 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun deleteSet(exerciseId: String, setIndex: Int) {
+        if (!canEditWorkout) return
         val current = workout ?: return
         val updated = current.copy(
             entries = current.entries.mapNotNull { entry ->
                 if (entry.exerciseId == exerciseId) {
+                    if (setIndex !in entry.sets.indices) return@mapNotNull entry
                     val sets = entry.sets.toMutableList().also { it.removeAt(setIndex) }
                     if (sets.isEmpty()) null else entry.copy(sets = sets)
                 } else entry
@@ -192,15 +258,35 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun deleteExercise(exerciseId: String) {
+        if (!canEditWorkout) return
         val current = workout ?: return
         val updated = current.copy(entries = current.entries.filter { it.exerciseId != exerciseId })
         if (updated.entries.isEmpty()) deleteCurrentWorkout() else persist(updated)
     }
 
     fun copyWorkoutFrom(sourceDate: LocalDate) {
-        viewModelScope.launch {
-            val source = withContext(Dispatchers.IO) { repo.loadWorkout(sourceDate) } ?: return@launch
-            persist(source.copy(date = selectedDate.toString()))
+        if (!canEditWorkout || workout?.entries?.any { it.sets.isNotEmpty() } == true) return
+        loadJob?.cancel()
+        val ticket = dateGuard.begin(selectedDate)
+        isWorkoutLoading = true
+        val copy = repo.copyWorkout(sourceDate, ticket.date)
+        watchMutation(copy)
+        loadJob = viewModelScope.launch {
+            try {
+                copy.await()
+                val copied = repo.loadWorkout(ticket.date)
+                if (dateGuard.accepts(ticket)) {
+                    workout = copied
+                    workoutLoadSucceeded = true
+                    isWorkoutLoading = false
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (dateGuard.accepts(ticket)) {
+                    isWorkoutLoading = false
+                    storageError = "Could not copy workout: ${e.message}"
+                }
+            }
         }
     }
 
@@ -212,6 +298,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
             }
 
     fun cleanEmptyExercises() {
+        if (!canEditWorkout) return
         val current = workout ?: return
         val cleaned = current.entries.filter { it.sets.isNotEmpty() }
         if (cleaned.size != current.entries.size) {
@@ -224,12 +311,14 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun deleteAllWorkouts() {
+        dateGuard.invalidate()
+        loadJob?.cancel()
         workoutDates = emptySet()
         allWorkouts = emptyList()
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { repo.deleteAllWorkoutFiles() }
-            workout = null
-        }
+        workout = null
+        isWorkoutLoading = false
+        workoutLoadSucceeded = true
+        watchMutation(repo.deleteAllWorkoutFiles())
     }
 
     fun addCustomExercise(
@@ -262,7 +351,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
             secondaryMuscles = secondaryMuscles
         )
         customExercises = updated
-        viewModelScope.launch(Dispatchers.IO) { repo.saveCustomExercises(updated) }
+        watchMutation(repo.saveCustomExercises(updated))
         return true
     }
 
@@ -278,10 +367,8 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
             val updated = workout!!.copy(entries = workout!!.entries.filter { it.exerciseId != exerciseId })
             workout = if (updated.entries.isEmpty()) null else updated
         }
-        viewModelScope.launch(Dispatchers.IO) {
-            repo.removeExerciseFromAllWorkouts(exerciseId)
-            repo.saveCustomExercises(customExercises)
-        }
+        watchMutation(repo.deleteCustomExercise(exerciseId))
+        if (isWorkoutLoading) loadWorkout()
     }
 
     suspend fun importBackup(uri: Uri) {
@@ -292,73 +379,42 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 throw IOException("Failed to create temporary restore directory")
             }
             try {
-                val extractedCount = run {
-                    val input = context.contentResolver.openInputStream(uri)
-                        ?: throw IOException("Cannot open backup file")
-                    var count = 0
-                    input.use { rawInput ->
-                        ZipInputStream(rawInput.buffered()).use { zis ->
-                            var entry = zis.nextEntry
-                            while (entry != null) {
-                                val safeName = File(entry.name).name
-                                if (!entry.isDirectory && isSyncableFile(safeName)) {
-                                    File(tempDir, safeName).writeBytes(zis.readBytes())
-                                    count++
-                                }
-                                zis.closeEntry()
-                                entry = zis.nextEntry
-                            }
-                        }
-                    }
-                    count
-                }
-
-                if (extractedCount == 0) {
-                    throw IOException("No valid workout or custom exercise files found in backup")
-                }
-
-                // Delete existing syncable files only after backup extraction succeeds
-                repo.syncableFiles().forEach { it.delete() }
-
-                // Move extracted files into workouts directory
-                repo.workoutsDir.mkdirs()
-                tempDir.listFiles()?.forEach { file ->
-                    file.copyTo(File(repo.workoutsDir, file.name), overwrite = true)
-                }
+                val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Cannot open backup file")
+                val coroutine = currentCoroutineContext()
+                input.use { extractWorkoutBackup(it, tempDir) { coroutine.ensureActive() } }
+                coroutine.ensureActive()
+                // Keep the staging files alive until the queued replacement/rollback has finished.
+                withContext(NonCancellable) { repo.restoreBackup(tempDir).await() }
             } finally {
                 tempDir.deleteRecursively()
             }
         }
+        dataRevision++
         reloadAll()
-        workout = withContext(Dispatchers.IO) { repo.loadWorkout(selectedDate) }
+        loadWorkout()
     }
 
     suspend fun exportBackupToUri(uri: Uri) = withContext(Dispatchers.IO) {
-        val files = repo.syncableFiles().sortedBy { it.name }
-        getApplication<Application>().contentResolver.openOutputStream(uri)?.buffered()?.use { out ->
-            ZipOutputStream(out).use { zos ->
-                files.forEach { file ->
-                    zos.putNextEntry(ZipEntry(file.name))
-                    file.inputStream().use { it.copyTo(zos) }
-                    zos.closeEntry()
-                }
-            }
-        }
+        val snapshot = repo.captureSnapshot()
+        exportWorkoutBackup(snapshot, getApplication<Application>().contentResolver.openOutputStream(uri))
     }
 
     private fun deleteCurrentWorkout() {
-        workoutDates = workoutDates - selectedDate
-        allWorkouts = allWorkouts.filter { it.date != selectedDate.toString() }
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { repo.deleteWorkout(selectedDate) }
-            workout = null
-        }
+        val date = workout?.date?.let(LocalDate::parse) ?: selectedDate
+        dateGuard.invalidate()
+        workoutDates = workoutDates - date
+        allWorkouts = allWorkouts.filter { it.date != date.toString() }
+        workout = null
+        watchMutation(repo.deleteWorkout(date))
     }
 
     private fun persist(w: WorkoutDay) {
+        val date = LocalDate.parse(w.date)
+        if (!canEditWorkout || date != selectedDate) return
+        dateGuard.invalidate()
         workout = w
         val clean = w.entries.filter { it.sets.isNotEmpty() }
-        workoutDates = if (clean.isNotEmpty()) workoutDates + selectedDate else workoutDates - selectedDate
+        workoutDates = if (clean.isNotEmpty()) workoutDates + date else workoutDates - date
         allWorkouts = if (clean.isEmpty()) {
             allWorkouts.filter { it.date != w.date }
         } else {
@@ -368,7 +424,13 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
             if (idx >= 0) list[idx] = updated else list.add(updated)
             list.sortedByDescending { it.date }
         }
-        viewModelScope.launch(Dispatchers.IO) { repo.saveWorkout(w) }
+        watchMutation(repo.saveWorkout(w))
+    }
+
+    private fun validSet(reps: Int, kg: Double): Boolean {
+        if (reps > 0 && kg.isFinite() && kg >= 0 && (reps * kg).isFinite()) return true
+        storageError = "Use positive reps and a finite, nonnegative weight. Zero weight is valid."
+        return false
     }
 }
 

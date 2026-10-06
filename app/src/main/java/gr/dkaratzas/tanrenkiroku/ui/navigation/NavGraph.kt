@@ -4,6 +4,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -21,6 +24,16 @@ private const val FADE_DURATION = 350
 @Composable
 fun NavGraph(viewModel: WorkoutViewModel = viewModel()) {
     val navController = rememberNavController()
+
+    viewModel.storageError?.let { message ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissStorageError,
+            title = { Text("Workout data error") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = viewModel::retryStorage) { Text("Retry") } },
+            dismissButton = { TextButton(onClick = viewModel::dismissStorageError) { Text("Close") } }
+        )
+    }
 
     NavHost(
         navController = navController,

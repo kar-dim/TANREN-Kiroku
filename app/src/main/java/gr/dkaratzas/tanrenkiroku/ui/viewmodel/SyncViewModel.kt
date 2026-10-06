@@ -9,14 +9,19 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import gr.dkaratzas.tanrenkiroku.data.QrPayload
 import gr.dkaratzas.tanrenkiroku.data.SyncRepository
+import gr.dkaratzas.tanrenkiroku.data.WorkoutRepository
+import gr.dkaratzas.tanrenkiroku.data.parseSyncQr
+import gr.dkaratzas.tanrenkiroku.data.syncToDesktop
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.withContext
 import java.io.File
 
 // Main View Model for syncing to desktop purposes
 
 private const val TAG = "TanrenSync"
-private val json = Json { ignoreUnknownKeys = true }
 
 sealed class SyncState {
     object Scanning : SyncState()
@@ -30,11 +35,10 @@ class SyncViewModel(application: Application) : AndroidViewModel(application) {
     var state by mutableStateOf<SyncState>(SyncState.Scanning)
         private set
 
-    private val workoutsDir: File
-        get() = getApplication<Application>().getExternalFilesDir(null)
-            ?: getApplication<Application>().filesDir
+    private val workoutsDir: File = WorkoutRepository(application).workoutsDir
 
     private var qrHandled = false
+    private var syncJob: Job? = null
 
     fun onQrScanned(raw: String) {
         if (qrHandled)
@@ -42,44 +46,40 @@ class SyncViewModel(application: Application) : AndroidViewModel(application) {
         qrHandled = true
 
         val payload = try {
-            json.decodeFromString<QrPayload>(raw)
+            parseSyncQr(raw)
+        } catch (e: IllegalArgumentException) {
+            state = SyncState.Failed(e.message ?: "Invalid desktop QR code")
+            return
         } catch (e: Exception) {
-            Log.e(TAG, "QR parse failed: $raw", e)
-            state = SyncState.Failed("Invalid QR code: ${e.message}")
+            // Serialization exceptions can include the QR text and its bearer token.
+            Log.e(TAG, "QR parse failed: ${e::class.simpleName}")
+            state = SyncState.Failed("Invalid QR code. Scan the QR code shown by TANREN Metsuke.")
             return
         }
         runSync(payload)
     }
 
     private fun runSync(payload: QrPayload) {
-        viewModelScope.launch {
-            val repo = SyncRepository(workoutsDir, payload)
+        syncJob = viewModelScope.launch {
             try {
-                state = SyncState.InProgress("Connecting...")
-                repo.ping()
-
-                state = SyncState.InProgress("Sending manifest...")
-                val response = repo.sendManifest()
-
-                if (response.needed.isEmpty()) {
-                    state = SyncState.Done(uploaded = 0, deleted = response.deleted)
-                    return@launch
+                val result = syncToDesktop({ SyncRepository(workoutsDir, payload) }) { step ->
+                    withContext(Dispatchers.Main) { state = SyncState.InProgress(step) }
                 }
-
-                response.needed.forEachIndexed { i, filename ->
-                    state = SyncState.InProgress("Uploading file ${i + 1} of ${response.needed.size}...")
-                    repo.uploadFile(filename)
-                }
-
-                state = SyncState.Done(uploaded = response.needed.size, deleted = response.deleted)
+                state = SyncState.Done(uploaded = result.uploaded, deleted = result.deleted)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Sync failed at state: $state", e)
-                state = SyncState.Failed("${e::class.simpleName}: ${e.message}")
+                val step = (state as? SyncState.InProgress)?.step ?: "Sync"
+                state = SyncState.Failed(e.message?.takeIf { it.isNotBlank() }
+                    ?: "$step failed (${e.javaClass.simpleName}). Refresh the desktop connection and retry.")
             }
         }
     }
 
     fun reset() {
+        syncJob?.cancel()
+        syncJob = null
         qrHandled = false
         state = SyncState.Scanning
     }
